@@ -6,11 +6,14 @@ from mer_summary.config import Config, load_config
 
 
 @pytest.fixture(autouse=True)
-def _isolate_env(monkeypatch, tmp_path):
-    """각 테스트는 작업 디렉토리를 tmp_path로 이동해 우연한 .env 로드를 막는다.
-    그리고 3개 필수 변수를 모두 삭제해 깨끗한 상태에서 시작.
+def _isolate_env(monkeypatch):
+    """각 테스트에서 .env 로드를 막고 필수 변수를 환경에서 제거한다.
+
+    load_dotenv는 기본 usecwd=False라 호출자 파일(config.py) 기준으로
+    부모 디렉토리를 검색해 실제 mer-summary/.env를 찾아낸다.
+    chdir로는 막을 수 없으므로 함수 자체를 no-op으로 monkeypatch.
     """
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("mer_summary.config.load_dotenv", lambda *a, **kw: False)
     for name in ("ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
         monkeypatch.delenv(name, raising=False)
 

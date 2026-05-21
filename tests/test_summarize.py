@@ -116,6 +116,25 @@ def test_summarize_raises_when_response_not_json(fake_anthropic, article, cfg):
         summarize(article, cfg)
 
 
+def test_summarize_accepts_code_fenced_json(fake_anthropic, article, cfg):
+    """Claude가 ```json ... ``` 코드펜스로 감싸서 응답해도 파싱돼야 한다."""
+    fake_anthropic.response_text = (
+        '```json\n{"title":"t","bullets":["a","b","c"]}\n```'
+    )
+    result = summarize(article, cfg)
+    assert result.title == "t"
+    assert result.bullets == ["a", "b", "c"]
+
+
+def test_summarize_accepts_json_with_prefix_text(fake_anthropic, article, cfg):
+    """JSON 앞에 설명문이 붙어 와도 추출돼야 한다."""
+    fake_anthropic.response_text = (
+        '다음은 요약입니다:\n{"title":"t","bullets":["a","b","c"]}'
+    )
+    result = summarize(article, cfg)
+    assert result.title == "t"
+
+
 def test_summarize_raises_when_title_missing(fake_anthropic, article, cfg):
     fake_anthropic.response_text = '{"bullets":["a","b","c"]}'
     with pytest.raises(RuntimeError, match="title"):

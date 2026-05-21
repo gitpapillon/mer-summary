@@ -39,6 +39,19 @@ class Summary:
     bullets: list[str]
 
 
+def _extract_json_object(text: str) -> str:
+    """LLM 응답에서 JSON 객체 영역만 추출. 코드펜스/설명 prefix가 있어도 흡수.
+
+    첫 '{' 부터 마지막 '}' 까지를 잘라낸다. 둘 다 없으면 빈 문자열 반환 →
+    json.loads가 적절한 에러를 낼 것.
+    """
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return ""
+    return text[start : end + 1]
+
+
 def summarize(article: ArticleText, cfg: Config) -> Summary:
     """ArticleText → Summary. Anthropic API 호출."""
     client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
@@ -59,8 +72,9 @@ def summarize(article: ArticleText, cfg: Config) -> Summary:
     )
 
     raw = message.content[0].text if message.content else ""
+    json_str = _extract_json_object(raw)
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(json_str)
     except json.JSONDecodeError as e:
         raise RuntimeError(
             f"summarize: 응답이 JSON 아님: {raw[:200]!r}"
