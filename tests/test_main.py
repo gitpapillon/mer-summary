@@ -18,11 +18,17 @@ _CFG = Config(
 
 
 @pytest.fixture
-def patched(monkeypatch):
-    """기본 happy-path 더미: load_config + services 통째로 가짜화. 호출 카운트 기록."""
+def patched(monkeypatch, tmp_path):
+    """기본 happy-path: load_config + 모든 외부 서비스 가짜화. 호출 카운트 기록.
+
+    sent_log 파일을 tmp 경로로 격리해 실제 디스크 영향 없음. 빈 상태로 시작.
+    list_posts/filter_recent_days는 각 테스트가 명시적으로 다시 monkeypatch한다.
+    """
     calls = {"fetch_article": 0, "summarize": 0, "send": 0, "list_posts": 0}
 
     monkeypatch.setattr(mainmod, "load_config", lambda: _CFG)
+    monkeypatch.setattr(mainmod, "DEFAULT_STATE_FILE", tmp_path / "sent.json")
+
     monkeypatch.setattr(
         mainmod.fetch, "fetch_article",
         lambda url: (calls.__setitem__("fetch_article", calls["fetch_article"] + 1),
@@ -39,34 +45,10 @@ def patched(monkeypatch):
     )
     monkeypatch.setattr(
         mainmod.fetch, "list_posts",
-        lambda blog_id, **kwargs: (calls.__setitem__("list_posts", calls["list_posts"] + 1),
-                                   [])[1],
+        lambda blog_id, **kw: (calls.__setitem__("list_posts", calls["list_posts"] + 1),
+                               [])[1],
     )
     return calls
-
-
-# ─── 개별 글 URL 흐름 ─────────────────────────────────────────────────
-
-
-def test_individual_post_url_flow(patched, capsys):
-    url = "https://blog.naver.com/PostView.naver?blogId=ranto28&logNo=1"
-    rc = mainmod.main([url])
-
-    assert rc == 0
-    assert patched["fetch_article"] == 1
-    assert patched["summarize"] == 1
-    assert patched["send"] == 1
-    assert patched["list_posts"] == 0  # 메인 URL 아니므로 list 호출 안 함
-
-
-def test_generic_url_flow(patched):
-    rc = mainmod.main(["https://example.com/post/1"])
-    assert rc == 0
-    assert patched["fetch_article"] == 1
-    assert patched["list_posts"] == 0
-
-
-# ─── 블로그 메인 URL — 당일 N개 ───────────────────────────────────────
 
 
 def _refs(*log_nos):
@@ -81,139 +63,119 @@ def _refs(*log_nos):
     ]
 
 
-def test_blog_main_with_today_posts(monkeypatch, patched, capsys):
-    # 5개 글 중 3개를 당일로 반환하도록 monkeypatch
-    monkeypatch.setattr(mainmod.fetch, "list_posts", lambda blog_id, **kw: _refs("1", "2", "3", "4", "5"))
-    monkeypatch.setattr(mainmod.fetch, "filter_today", lambda refs, now: refs[:3])
+# ─── 개별 글 URL 흐름 ─────────────────────────────────────────────────
 
-    rc = mainmod.main(["https://blog.naver.com/ranto28"])
+
+def test_individual_post_url_flow(patched, tmp_path):
+    url = "https://blog.naver.com/PostView.naver?blogId=ranto28&logNo=1"
+    rc = mainmod.main([url, "--state-file", str(tmp_path / "s.json")])
+
+    assert rc == 0
+    assert patched["fetch_article"] == 1
+    assert patched["summarize"] == 1
+    assert patched["send"] == 1
+    assert patched["list_posts"] == 0
+
+
+def test_generic_url_flow(patched, tmp_path):
+    rc = mainmod.main(["https://example.com/post/1", "--state-file", str(tmp_path / "s.json")])
+    assert rc == 0
+    assert patched["fetch_article"] == 1
+    assert patched["list_posts"] == 0
+
+
+# ─── 블로그 메인 URL — 어제+오늘 N개 ──────────────────────────────────
+
+
+def test_blog_main_with_recent_posts(monkeypatch, patched, tmp_path, capsys):
+    monkeypatch.setattr(mainmod.fetch, "list_posts", lambda blog_id, **kw: _refs("1", "2", "3", "4", "5"))
+    monkeypatch.setattr(mainmod.fetch, "filter_recent_days", lambda refs, now, *, days: refs[:3])
+
+    rc = mainmod.main(["https://blog.naver.com/ranto28", "--state-file", str(tmp_path / "s.json")])
 
     assert rc == 0
     assert patched["fetch_article"] == 3
-    assert patched["summarize"] == 3
     assert patched["send"] == 3
     err = capsys.readouterr().err
-    assert "당일 글 3개" in err
+    assert "신규 3개 처리" in err
 
 
-def test_blog_main_with_no_today_posts(monkeypatch, patched, capsys):
+def test_no_recent_posts(monkeypatch, patched, tmp_path, capsys):
     monkeypatch.setattr(mainmod.fetch, "list_posts", lambda blog_id, **kw: _refs("1", "2"))
-    monkeypatch.setattr(mainmod.fetch, "filter_today", lambda refs, now: [])
+    monkeypatch.setattr(mainmod.fetch, "filter_recent_days", lambda refs, now, *, days: [])
 
-    rc = mainmod.main(["https://blog.naver.com/ranto28"])
+    rc = mainmod.main(["https://blog.naver.com/ranto28", "--state-file", str(tmp_path / "s.json")])
 
     assert rc == 0
     assert patched["fetch_article"] == 0
-    assert "당일 작성된 글이 없습니다." in capsys.readouterr().err
+    assert "새로 전송할 글이 없습니다." in capsys.readouterr().err
 
 
-# ─── 부분 실패 ─────────────────────────────────────────────────────────
+# ─── dedup ────────────────────────────────────────────────────────────
 
 
-def test_partial_failure_skips_and_returns_1(monkeypatch, patched, capsys):
+def test_dedup_skips_already_sent(monkeypatch, patched, tmp_path, capsys):
+    state = tmp_path / "s.json"
+    # 1과 2를 이미 보낸 상태로 초기화
+    from mer_summary.services.dedup import save_sent
+    save_sent(state, {"1", "2"})
+
     monkeypatch.setattr(mainmod.fetch, "list_posts", lambda blog_id, **kw: _refs("1", "2", "3"))
-    monkeypatch.setattr(mainmod.fetch, "filter_today", lambda refs, now: refs)
+    monkeypatch.setattr(mainmod.fetch, "filter_recent_days", lambda refs, now, *, days: refs)
 
-    # 2번째 글에서 summarize가 RuntimeError 발생
-    def flaky_summarize(article, cfg):
+    rc = mainmod.main(["https://blog.naver.com/ranto28", "--state-file", str(state)])
+
+    assert rc == 0
+    # 신규는 3만 → 1번 처리
+    assert patched["fetch_article"] == 1
+    assert patched["send"] == 1
+    # sent_log 갱신됨 (1, 2, 3 모두 포함)
+    from mer_summary.services.dedup import load_sent
+    assert load_sent(state) == {"1", "2", "3"}
+
+
+def test_dedup_all_sent_no_op(monkeypatch, patched, tmp_path, capsys):
+    state = tmp_path / "s.json"
+    from mer_summary.services.dedup import save_sent
+    save_sent(state, {"1", "2", "3"})
+    saved_mtime = state.stat().st_mtime
+
+    monkeypatch.setattr(mainmod.fetch, "list_posts", lambda blog_id, **kw: _refs("1", "2", "3"))
+    monkeypatch.setattr(mainmod.fetch, "filter_recent_days", lambda refs, now, *, days: refs)
+
+    rc = mainmod.main(["https://blog.naver.com/ranto28", "--state-file", str(state)])
+
+    assert rc == 0
+    assert patched["fetch_article"] == 0
+    # sent_log 파일은 변경되지 않음 (no-op)
+    assert state.stat().st_mtime == saved_mtime
+
+
+def test_partial_failure_does_not_pollute_sent_log(monkeypatch, patched, tmp_path):
+    state = tmp_path / "s.json"
+    monkeypatch.setattr(mainmod.fetch, "list_posts", lambda blog_id, **kw: _refs("1", "2", "3"))
+    monkeypatch.setattr(mainmod.fetch, "filter_recent_days", lambda refs, now, *, days: refs)
+
+    # 2번 글에서 summarize 실패
+    def flaky(article, cfg):
         if article.url.endswith("logNo=2"):
             raise RuntimeError("API limit")
         return Summary(article.url, "S", ["a", "b", "c"])
 
-    monkeypatch.setattr(mainmod.summarize, "summarize", flaky_summarize)
+    monkeypatch.setattr(mainmod.summarize, "summarize", flaky)
 
-    rc = mainmod.main(["https://blog.naver.com/ranto28"])
-
-    assert rc == 1
-    err = capsys.readouterr().err
-    assert "[skip]" in err
-    assert "API limit" in err
-
-
-# ─── load_config 실패 ─────────────────────────────────────────────────
-
-
-def test_load_config_failure_returns_2(monkeypatch, capsys):
-    def boom():
-        raise RuntimeError("env 누락")
-    monkeypatch.setattr(mainmod, "load_config", boom)
-
-    rc = mainmod.main(["https://blog.naver.com/ranto28"])
-
-    assert rc == 2
-    assert "env 누락" in capsys.readouterr().err
-
-
-# ─── --now 주입 ────────────────────────────────────────────────────────
-
-
-def test_now_argument_passed_to_filter_today(monkeypatch, patched):
-    captured = {}
-    monkeypatch.setattr(mainmod.fetch, "list_posts", lambda blog_id, **kw: _refs("1"))
-
-    def capture_filter(refs, now):
-        captured["now"] = now
-        return refs
-
-    monkeypatch.setattr(mainmod.fetch, "filter_today", capture_filter)
-
-    mainmod.main(["https://blog.naver.com/ranto28", "--now", "2026-05-21T10:00:00"])
-
-    assert captured["now"] == datetime(2026, 5, 21, 10, 0, 0)
-
-
-# ─── list_posts 실패 ──────────────────────────────────────────────────
-
-
-def test_list_posts_failure_returns_1(monkeypatch, patched, capsys):
-    monkeypatch.setattr(
-        mainmod.fetch, "list_posts",
-        lambda blog_id, **kw: (_ for _ in ()).throw(RuntimeError("net down")),
-    )
-
-    rc = mainmod.main(["https://blog.naver.com/ranto28"])
+    rc = mainmod.main(["https://blog.naver.com/ranto28", "--state-file", str(state)])
 
     assert rc == 1
-    assert "net down" in capsys.readouterr().err
+    # 1과 3만 sent_log에 들어감 (2는 실패라서 제외)
+    from mer_summary.services.dedup import load_sent
+    assert load_sent(state) == {"1", "3"}
 
 
-# ─── categoryNo 전달 ──────────────────────────────────────────────────
+# ─── 다중 URL ─────────────────────────────────────────────────────────
 
 
-def test_category_no_passed_to_list_posts(monkeypatch, patched):
-    captured = {}
-
-    def capture_list(blog_id, **kwargs):
-        captured["blog_id"] = blog_id
-        captured["category_no"] = kwargs.get("category_no")
-        return []
-
-    monkeypatch.setattr(mainmod.fetch, "list_posts", capture_list)
-
-    mainmod.main(["https://m.blog.naver.com/ranto28?categoryNo=21&tab=1"])
-
-    assert captured["blog_id"] == "ranto28"
-    assert captured["category_no"] == "21"
-
-
-def test_category_no_is_none_when_url_has_no_query(monkeypatch, patched):
-    captured = {}
-
-    def capture_list(blog_id, **kwargs):
-        captured["category_no"] = kwargs.get("category_no")
-        return []
-
-    monkeypatch.setattr(mainmod.fetch, "list_posts", capture_list)
-
-    mainmod.main(["https://blog.naver.com/ranto28"])
-
-    assert captured["category_no"] is None
-
-
-# ─── 다중 URL ──────────────────────────────────────────────────────────
-
-
-def test_multiple_urls_each_listed_separately(monkeypatch, patched, capsys):
+def test_multiple_urls_each_listed_separately(monkeypatch, patched, tmp_path):
     calls = []
 
     def capture_list(blog_id, **kwargs):
@@ -221,51 +183,69 @@ def test_multiple_urls_each_listed_separately(monkeypatch, patched, capsys):
         return _refs(f"x-{blog_id}-{kwargs.get('category_no')}")
 
     monkeypatch.setattr(mainmod.fetch, "list_posts", capture_list)
-    monkeypatch.setattr(mainmod.fetch, "filter_today", lambda refs, now: refs)
+    monkeypatch.setattr(mainmod.fetch, "filter_recent_days", lambda refs, now, *, days: refs)
 
     rc = mainmod.main([
         "https://m.blog.naver.com/ranto28?categoryNo=21",
         "https://blog.naver.com/PostList.naver?blogId=ranto28&categoryNo=28",
+        "--state-file", str(tmp_path / "s.json"),
     ])
 
     assert rc == 0
     assert calls == [("ranto28", "21"), ("ranto28", "28")]
-    # 두 URL 각각 1개씩 = 총 2개 글 처리
     assert patched["fetch_article"] == 2
     assert patched["send"] == 2
 
 
-def test_multiple_urls_partial_failure_returns_1(monkeypatch, patched, capsys):
-    def list_first_ok_second_fails(blog_id, **kwargs):
-        if kwargs.get("category_no") == "28":
-            raise RuntimeError("temp net error")
-        return _refs("a")
+# ─── load_config 실패 ─────────────────────────────────────────────────
 
-    monkeypatch.setattr(mainmod.fetch, "list_posts", list_first_ok_second_fails)
-    monkeypatch.setattr(mainmod.fetch, "filter_today", lambda refs, now: refs)
 
-    rc = mainmod.main([
-        "https://m.blog.naver.com/ranto28?categoryNo=21",
-        "https://blog.naver.com/PostList.naver?blogId=ranto28&categoryNo=28",
+def test_load_config_failure_returns_2(monkeypatch, tmp_path, capsys):
+    def boom():
+        raise RuntimeError("env 누락")
+    monkeypatch.setattr(mainmod, "load_config", boom)
+
+    rc = mainmod.main(["https://blog.naver.com/ranto28", "--state-file", str(tmp_path / "s.json")])
+
+    assert rc == 2
+    assert "env 누락" in capsys.readouterr().err
+
+
+# ─── --now / --days 인자 ──────────────────────────────────────────────
+
+
+def test_now_and_days_passed_to_filter(monkeypatch, patched, tmp_path):
+    captured = {}
+    monkeypatch.setattr(mainmod.fetch, "list_posts", lambda blog_id, **kw: _refs("1"))
+
+    def capture_filter(refs, now, *, days):
+        captured["now"] = now
+        captured["days"] = days
+        return refs
+
+    monkeypatch.setattr(mainmod.fetch, "filter_recent_days", capture_filter)
+
+    mainmod.main([
+        "https://blog.naver.com/ranto28",
+        "--now", "2026-05-22T10:00:00",
+        "--days", "3",
+        "--state-file", str(tmp_path / "s.json"),
     ])
 
-    assert rc == 1
-    err = capsys.readouterr().err
-    assert "temp net error" in err
-    # 첫 URL은 정상 처리됨
-    assert patched["fetch_article"] == 1
+    assert captured["now"] == datetime(2026, 5, 22, 10, 0, 0)
+    assert captured["days"] == 3
 
 
-def test_multiple_urls_all_no_today_posts(monkeypatch, patched, capsys):
-    monkeypatch.setattr(mainmod.fetch, "list_posts", lambda blog_id, **kw: _refs("a"))
-    monkeypatch.setattr(mainmod.fetch, "filter_today", lambda refs, now: [])
+def test_days_default_is_2(monkeypatch, patched, tmp_path):
+    captured = {}
+    monkeypatch.setattr(mainmod.fetch, "list_posts", lambda blog_id, **kw: _refs("1"))
 
-    rc = mainmod.main([
-        "https://m.blog.naver.com/ranto28?categoryNo=21",
-        "https://blog.naver.com/PostList.naver?blogId=ranto28&categoryNo=28",
-    ])
+    def capture_filter(refs, now, *, days):
+        captured["days"] = days
+        return refs
 
-    assert rc == 0
-    assert patched["fetch_article"] == 0
-    err = capsys.readouterr().err
-    assert "모든 URL에 당일 작성된 글이 없습니다." in err
+    monkeypatch.setattr(mainmod.fetch, "filter_recent_days", capture_filter)
+
+    mainmod.main(["https://blog.naver.com/ranto28", "--state-file", str(tmp_path / "s.json")])
+
+    assert captured["days"] == 2

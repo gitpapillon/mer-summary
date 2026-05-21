@@ -15,6 +15,7 @@ from mer_summary.services.fetch import (
     fetch_article,
     fetch_generic,
     fetch_naver_post,
+    filter_recent_days,
     filter_today,
     is_naver_blog_main,
     list_posts,
@@ -218,6 +219,46 @@ def test_filter_today_unknown_format_is_not_today():
     result = filter_today(refs, now)
 
     assert result == []
+
+
+# ─── filter_recent_days ───────────────────────────────────────────────
+
+
+def test_filter_recent_days_2_includes_today_and_yesterday():
+    refs = [
+        _ref("a", "4시간 전"),       # 상대 — 오늘
+        _ref("b", "2026. 5. 22."),   # 오늘 (now가 5/22)
+        _ref("c", "2026. 5. 21."),   # 어제
+        _ref("d", "2026. 5. 20."),   # 이틀 전 → 제외
+        _ref("e", "2026. 5. 19."),
+    ]
+    now = datetime(2026, 5, 22, 10, 0, 0)
+
+    result = filter_recent_days(refs, now, days=2)
+
+    assert [r.log_no for r in result] == ["a", "b", "c"]
+
+
+def test_filter_recent_days_1_equals_filter_today():
+    refs = [
+        _ref("a", "4시간 전"),
+        _ref("b", "2026. 5. 21."),   # 오늘
+        _ref("c", "2026. 5. 20."),
+    ]
+    now = datetime(2026, 5, 21, 10, 0, 0)
+
+    assert filter_recent_days(refs, now, days=1) == filter_today(refs, now)
+
+
+def test_filter_recent_days_rejects_invalid_dates():
+    refs = [_ref("a", "2026. 13. 99."), _ref("b", "어제")]
+    now = datetime(2026, 5, 22, 10, 0, 0)
+    assert filter_recent_days(refs, now, days=3) == []
+
+
+def test_filter_recent_days_rejects_invalid_days():
+    with pytest.raises(ValueError):
+        filter_recent_days([], datetime(2026, 5, 22), days=0)
 
 
 # ─── fetch_naver_post ─────────────────────────────────────────────────

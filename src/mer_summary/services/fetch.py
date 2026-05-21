@@ -3,7 +3,7 @@
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import httpx
@@ -183,7 +183,21 @@ def filter_today(refs: list[PostRef], now: datetime) -> list[PostRef]:
       - r'YYYY. M. D.' → now.date()와 정확히 일치 시 당일
       - 그 외 → 당일 아님 (보수적)
     """
-    today = now.date()
+    return filter_recent_days(refs, now, days=1)
+
+
+def filter_recent_days(refs: list[PostRef], now: datetime, *, days: int) -> list[PostRef]:
+    """최근 N일(오늘 포함) 안에 작성된 PostRef만 반환.
+
+    예: days=2 → 오늘 + 어제. days=1 → 오늘만(== filter_today).
+    규칙:
+      - r'\\d+분 전' / r'\\d+시간 전' → 항상 포함 (오늘 작성으로 간주).
+      - r'YYYY. M. D.' → now.date() - (days-1) 이상이면 포함.
+      - 그 외 (정체불명 포맷) → 제외 (보수적).
+    """
+    if days < 1:
+        raise ValueError(f"days는 1 이상이어야 함: {days}")
+    cutoff = now.date() - timedelta(days=days - 1)
     out: list[PostRef] = []
     for r in refs:
         raw = r.add_date_raw.strip()
@@ -193,6 +207,10 @@ def filter_today(refs: list[PostRef], now: datetime) -> list[PostRef]:
         m = _DATE_TEXT_RE.match(raw)
         if m:
             y, mo, d = (int(x) for x in m.groups())
-            if (y, mo, d) == (today.year, today.month, today.day):
+            try:
+                post_date = datetime(y, mo, d).date()
+            except ValueError:
+                continue
+            if post_date >= cutoff:
                 out.append(r)
     return out

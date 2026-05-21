@@ -1,0 +1,57 @@
+name: daily-summary
+
+# 매 시간 실행 — 메르 블로그(ranto28) 카테고리 21+28의 신규 글을 텔레그램으로 전송.
+# 이미 보낸 logNo는 state/sent_log.json 으로 스킵.
+# 시크릿: ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID — repo Settings → Secrets.
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # UTC 매 정시. KST 기준 9분 빠르거나 같음 (cron lag).
+  workflow_dispatch: {}    # 수동 실행 가능
+
+# sent_log.json 자동 commit 위해 write 권한 필요
+permissions:
+  contents: write
+
+# 동일 시간대 중복 실행 방지
+concurrency:
+  group: daily-summary
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.11.15"
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Run mer-summary
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          uv run mer-summary \
+            "https://m.blog.naver.com/ranto28?categoryNo=21&tab=1" \
+            "https://blog.naver.com/PostList.naver?blogId=ranto28&from=postList&categoryNo=28"
+
+      - name: Commit sent_log if changed
+        run: |
+          if git diff --quiet state/sent_log.json; then
+            echo "sent_log unchanged — no commit."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add state/sent_log.json
+          git commit -m "chore: update sent_log [skip ci]"
+          git push

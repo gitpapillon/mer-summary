@@ -17,14 +17,21 @@
 3. **요약**: Claude API로 한국어 요약 (제목 + bullet 3–5개).
 4. **전송**: 글 1개당 텔레그램 메시지 1개. 원문 링크 포함.
 
+## 자동화
+GitHub Actions schedule(매시간) — `.github/workflows/daily-summary.yml`. 워크플로우가:
+1. cat=21 + cat=28 URL을 한 번에 처리,
+2. `state/sent_log.json` 기반 dedup(이미 보낸 글 스킵),
+3. 새 글이 있으면 `[bot]`이 sent_log 변경분만 자동 commit + push.
+시크릿(`ANTHROPIC_API_KEY`/`TELEGRAM_*`)은 repo Settings → Secrets에 등록.
+
 ## MVP 제외 사항
-- 여러 URL 일괄 처리 (입력은 1개 URL — 단, 그 1개가 블로그 메인이면 당일 글 N개 자동 처리).
-- RSS/Atom 피드 폴링 (네이버 JSON API 1회 호출은 폴링 아님).
-- 요약 이력 저장(DB) — 같은 글 중복 전송 가능.
+- 여러 URL 일괄 처리는 **지원함** (CLI 인자 nargs='+').
+- RSS/Atom 피드 폴링 (네이버 JSON API + GitHub Actions cron으로 대체).
 - 웹 UI / 설정 UI — 모든 설정은 환경변수.
 - 멀티 사용자 / 멀티 chat_id 분기.
 - 이미지·동영상 추출.
 - 재시도/큐잉 — 글 1개 실패 시 stderr 로그 후 다음 글로 진행 (전체 중단 X).
+- 요약 이력의 풍부한 추적(DB) — `sent_log.json`은 logNo 셋만 보관, 메타 없음.
 
 ## 설계 원칙
 - 작동하는 최소 구현 우선.
