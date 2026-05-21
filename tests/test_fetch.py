@@ -40,9 +40,12 @@ FIXTURES = Path(__file__).parent / "fixtures"
         ("https://m.blog.naver.com/ranto28?categoryNo=21&tab=1", ("ranto28", "21")),
         ("https://blog.naver.com/ranto28?categoryNo=19", ("ranto28", "19")),
         ("https://m.blog.naver.com/ranto28?tab=1", ("ranto28", None)),
+        # PostList.naver — query-based blogId
+        ("https://blog.naver.com/PostList.naver?blogId=ranto28", ("ranto28", None)),
+        ("https://blog.naver.com/PostList.naver?blogId=ranto28&from=postList&categoryNo=28", ("ranto28", "28")),
         # 제외 케이스
         ("https://blog.naver.com/PostView.naver?blogId=ranto28&logNo=1", None),
-        ("https://blog.naver.com/PostList.naver?blogId=ranto28", None),
+        ("https://blog.naver.com/PostList.naver", None),  # blogId 없음
         ("https://blog.naver.com/", None),
         ("https://example.com/blog/post1", None),
         ("https://blog.naver.com/ranto28/some-extra/path", None),

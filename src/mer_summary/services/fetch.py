@@ -41,10 +41,11 @@ def is_naver_blog_main(url: str) -> tuple[str, str | None] | None:
     """블로그 메인 URL이면 (blogId, categoryNo) 반환, 아니면 None.
 
     매칭:
-      - `https://blog.naver.com/{blogId}` (끝 슬래시 허용)
+      - `https://blog.naver.com/{blogId}` (PC, 끝 슬래시 허용)
       - `https://m.blog.naver.com/{blogId}` (모바일)
-      - 위 + `?categoryNo={N}` 쿼리(다른 파라미터 있어도 OK)
-    제외: PostView.naver / PostList.naver / blogId 없는 형태 / 다른 도메인.
+      - `https://blog.naver.com/PostList.naver?blogId={id}` (글 목록 페이지, query-based)
+      - 위 모두 + `?categoryNo={N}` 쿼리 추출
+    제외: PostView.naver(개별 글) / blogId 없는 형태 / 다른 도메인.
     categoryNo가 없거나 비어있으면 두 번째 값은 None.
     """
     parsed = urlparse(url)
@@ -52,12 +53,23 @@ def is_naver_blog_main(url: str) -> tuple[str, str | None] | None:
         return None
     if parsed.hostname not in _NAVER_HOSTS:
         return None
-    path = parsed.path.strip("/")
-    if not path or "/" in path or not _BLOG_ID_RE.match(path):
-        return None
     qs = parse_qs(parsed.query)
     cat = (qs.get("categoryNo") or [None])[0]
-    return (path, cat if cat else None)
+    cat = cat if cat else None
+
+    path = parsed.path.strip("/")
+
+    # 패턴 1: blog.naver.com/{blogId} — path가 곧 blogId
+    if path and "/" not in path and _BLOG_ID_RE.match(path):
+        return (path, cat)
+
+    # 패턴 2: blog.naver.com/PostList.naver?blogId={id} — query에서 blogId 추출
+    if path == "PostList.naver":
+        blog_id = (qs.get("blogId") or [None])[0]
+        if blog_id and _BLOG_ID_RE.match(blog_id):
+            return (blog_id, cat)
+
+    return None
 
 
 def list_posts(

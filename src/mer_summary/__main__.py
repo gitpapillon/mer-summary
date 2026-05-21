@@ -19,7 +19,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("url", help="블로그 메인 URL 또는 개별 게시글 URL")
+    parser.add_argument(
+        "urls",
+        nargs="+",
+        metavar="URL",
+        help="블로그 메인 URL 또는 개별 게시글 URL (여러 개 가능 — 모두 같은 실행에 처리)",
+    )
     parser.add_argument(
         "--now",
         type=datetime.fromisoformat,
@@ -51,30 +56,42 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     now = args.now or datetime.now()
-    main_match = fetch.is_naver_blog_main(args.url)
-
-    if main_match is None:
-        ok = _process_one(args.url, cfg)
-        return 0 if ok else 1
-
-    blog_id, category_no = main_match
-    # 네이버 블로그 메인 — 당일 글 N개 순회
-    try:
-        refs = fetch.list_posts(blog_id, category_no=category_no)
-    except RuntimeError as e:
-        print(f"[list] {args.url}: {e}", file=sys.stderr)
-        return 1
-
-    today_refs = fetch.filter_today(refs, now)
-    if not today_refs:
-        print("당일 작성된 글이 없습니다.", file=sys.stderr)
-        return 0
-
-    print(f"[info] 당일 글 {len(today_refs)}개 처리 시작", file=sys.stderr)
     any_failed = False
-    for ref in today_refs:
-        if not _process_one(ref.url, cfg):
+    total_today = 0
+
+    for url in args.urls:
+        main_match = fetch.is_naver_blog_main(url)
+
+        if main_match is None:
+            if not _process_one(url, cfg):
+                any_failed = True
+            continue
+
+        blog_id, category_no = main_match
+        try:
+            refs = fetch.list_posts(blog_id, category_no=category_no)
+        except RuntimeError as e:
+            print(f"[list] {url}: {e}", file=sys.stderr)
             any_failed = True
+            continue
+
+        today_refs = fetch.filter_today(refs, now)
+        if not today_refs:
+            print(f"[info] {url}: 당일 글 없음", file=sys.stderr)
+            continue
+
+        total_today += len(today_refs)
+        print(
+            f"[info] {url} (blog_id={blog_id}, category={category_no or '전체'}) "
+            f"— 당일 글 {len(today_refs)}개 처리",
+            file=sys.stderr,
+        )
+        for ref in today_refs:
+            if not _process_one(ref.url, cfg):
+                any_failed = True
+
+    if total_today == 0 and not any_failed:
+        print("모든 URL에 당일 작성된 글이 없습니다.", file=sys.stderr)
     return 1 if any_failed else 0
 
 

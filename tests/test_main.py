@@ -208,3 +208,64 @@ def test_category_no_is_none_when_url_has_no_query(monkeypatch, patched):
     mainmod.main(["https://blog.naver.com/ranto28"])
 
     assert captured["category_no"] is None
+
+
+# ─── 다중 URL ──────────────────────────────────────────────────────────
+
+
+def test_multiple_urls_each_listed_separately(monkeypatch, patched, capsys):
+    calls = []
+
+    def capture_list(blog_id, **kwargs):
+        calls.append((blog_id, kwargs.get("category_no")))
+        return _refs(f"x-{blog_id}-{kwargs.get('category_no')}")
+
+    monkeypatch.setattr(mainmod.fetch, "list_posts", capture_list)
+    monkeypatch.setattr(mainmod.fetch, "filter_today", lambda refs, now: refs)
+
+    rc = mainmod.main([
+        "https://m.blog.naver.com/ranto28?categoryNo=21",
+        "https://blog.naver.com/PostList.naver?blogId=ranto28&categoryNo=28",
+    ])
+
+    assert rc == 0
+    assert calls == [("ranto28", "21"), ("ranto28", "28")]
+    # 두 URL 각각 1개씩 = 총 2개 글 처리
+    assert patched["fetch_article"] == 2
+    assert patched["send"] == 2
+
+
+def test_multiple_urls_partial_failure_returns_1(monkeypatch, patched, capsys):
+    def list_first_ok_second_fails(blog_id, **kwargs):
+        if kwargs.get("category_no") == "28":
+            raise RuntimeError("temp net error")
+        return _refs("a")
+
+    monkeypatch.setattr(mainmod.fetch, "list_posts", list_first_ok_second_fails)
+    monkeypatch.setattr(mainmod.fetch, "filter_today", lambda refs, now: refs)
+
+    rc = mainmod.main([
+        "https://m.blog.naver.com/ranto28?categoryNo=21",
+        "https://blog.naver.com/PostList.naver?blogId=ranto28&categoryNo=28",
+    ])
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "temp net error" in err
+    # 첫 URL은 정상 처리됨
+    assert patched["fetch_article"] == 1
+
+
+def test_multiple_urls_all_no_today_posts(monkeypatch, patched, capsys):
+    monkeypatch.setattr(mainmod.fetch, "list_posts", lambda blog_id, **kw: _refs("a"))
+    monkeypatch.setattr(mainmod.fetch, "filter_today", lambda refs, now: [])
+
+    rc = mainmod.main([
+        "https://m.blog.naver.com/ranto28?categoryNo=21",
+        "https://blog.naver.com/PostList.naver?blogId=ranto28&categoryNo=28",
+    ])
+
+    assert rc == 0
+    assert patched["fetch_article"] == 0
+    err = capsys.readouterr().err
+    assert "모든 URL에 당일 작성된 글이 없습니다." in err
