@@ -1,0 +1,13 @@
+{
+  "project": "mer-summary",
+  "phase": "0-mvp",
+  "steps": [
+    { "step": 0, "name": "project-setup", "status": "completed", "summary": "uv 0.11.15 설치, uv sync 완료, services/+tests/ 패키지 트리 생성, ruff All-passed, pytest collect-only exit=5(no tests)" },
+    { "step": 1, "name": "config", "status": "completed", "summary": "config.py + Config frozen dataclass + load_config(); 5 tests (성공/단일누락/전체누락/빈문자열/frozen) 통과" },
+    { "step": 2, "name": "naver-list", "status": "completed", "summary": "fetch.py: PostRef + is_naver_blog_main(blog_id+categoryNo 튜플, m.blog 도메인 허용)/list_posts(category_no 인자)/filter_today + JS-style escape 치환. 누적 26 tests 통과" },
+    { "step": 3, "name": "naver-body", "status": "completed", "summary": "fetch.py 확장: ArticleText + fetch_naver_post(BS4 se-main-container) + fetch_generic(trafilatura) + fetch_article 라우터. 7 추가 tests 통과 (누적 24)" },
+    { "step": 4, "name": "summarize", "status": "completed", "summary": "summarize.py: Anthropic Haiku 4.5 + prompt caching + JSON 스키마 검증. 8 tests 통과 (정상/모델/캐싱/user content/4가지 스키마 위반)" },
+    { "step": 5, "name": "telegram-send", "status": "completed", "summary": "telegram.py: format_message + send (httpx.Client) + 4096자 절단. 6 tests 통과 (포맷 3 + send 3)" },
+    { "step": 6, "name": "cli-orchestration", "status": "completed", "summary": "__main__.py: argparse + URL 분기 + N개 글 순회 + 부분실패 정책 (rc 0/1/2). 8 tests + 전체 51 tests 통과, --help 출력 정상" }
+  ]
+}
