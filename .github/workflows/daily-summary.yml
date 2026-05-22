@@ -1,6 +1,6 @@
 name: daily-summary
 
-# 매 시간 실행 — 메르 블로그(ranto28) 카테고리 21+28의 신규 글을 텔레그램으로 전송.
+# 매 시간 실행 — 메르 블로그(ranto28) 카테고리 19+21+28의 신규 글을 텔레그램으로 전송.
 # 이미 보낸 logNo는 state/sent_log.json 으로 스킵.
 # 시크릿: ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID — repo Settings → Secrets.
 
@@ -42,7 +42,8 @@ jobs:
         run: |
           uv run mer-summary \
             "https://m.blog.naver.com/ranto28?categoryNo=21&tab=1" \
-            "https://blog.naver.com/PostList.naver?blogId=ranto28&from=postList&categoryNo=28"
+            "https://blog.naver.com/PostList.naver?blogId=ranto28&from=postList&categoryNo=28" \
+            "https://blog.naver.com/PostList.naver?blogId=ranto28&categoryNo=19&skinType=&skinId=&from=menu&userSelectMenu=true"
 
       - name: Commit sent_log if changed
         run: |
